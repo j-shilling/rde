@@ -44,6 +44,7 @@
             feature-notmuch
             feature-msmtp
             feature-l2md
+            feature-mail-mcron
 
             mail-account
             mail-account-id
@@ -413,14 +414,6 @@ logfile \"~/.local/var/log/msmtp.log\"\n")
         (list
          #~(begin (for-each system '#$add-ml-tag))))))
 
-     ;; TODO: Move it to a separate feature and make it conditional
-     (service home-mcron-service-type
-              (home-mcron-configuration
-               (jobs (list #~(job '(next-hour)
-                                  (lambda ()
-                                    (setenv "DISPLAY" ":0")
-                                    (system* "mbsync" "-a")
-                                    (system* "l2md")))))))
      (service
       home-l2md-service-type
       (home-l2md-configuration
@@ -1058,6 +1051,38 @@ Set default MUA, adjust view, add auxiliary functions and keybindings."
   (feature
    (name f-name)
    (values `((,f-name . #t)))
+   (home-services-getter get-home-services)))
+
+(define* (feature-mail-mcron
+          #:key
+          (time-spec '(next-minute
+                       (range 0 60 5))))
+  "Configure mcron to invoke other email commands based on the other
+features that have been enabled."
+  (define (get-home-services config)
+    (list
+     (when (get-value 'isync config)
+       (let* ((sync-fn (get-value 'isync-synchronize-cmd-fn config))
+              (mail-accounts
+               (filter (lambda (x) (eq? (mail-account-synchronizer x) 'isync))
+                       (get-value 'mail-accounts config)))
+              (sync-cmds (map sync-fn mail-accounts))
+              (notmuch-cmds (if (get-value 'notmuch config)
+                                (list "notmuch new")
+                                (list)))
+              (l2md-cmds (if (get-value 'l2md config)
+                             (list "l2md")
+                             (list))))
+         (let ((cmds (append l2md-cmds sync-cmds notmuch-cmds)))
+           (simple-service
+            'isync-mcron-job
+            home-mcron-service-type
+            (list
+             #~(job '#$time-spec
+                    '(for-each system '#$cmds)))))))))
+
+  (feature
+   (name 'mail-mcron)
    (home-services-getter get-home-services)))
 
 ;; Think about delayed email sending
